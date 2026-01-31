@@ -8,7 +8,7 @@ import random
 import time
 import base64
 
-print("DEBUG: Running FINAL CORRECTED VERSION (Media Upload + Centered Embed)")
+print("DEBUG: Running FINAL CLEANED VERSION (No Markdown + URL Embed)")
 
 # 1. SETUP & CONFIG
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -17,12 +17,31 @@ HF_TOKEN = os.environ["HF_TOKEN"]
 IMGBB_KEY = os.environ["IMGBB_KEY"]
 WP_USER = os.environ["WP_USER"]
 WP_PASS = os.environ["WP_PASS"]
-# Base URL for WP API (e.g., https://site.com/wp-json/wp/v2)
+# Base URL for WP API
 WP_API_BASE = "https://test.harshtrivedi.in/wp-json/wp/v2"
 
 # Initialize Clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 hf_client = InferenceClient(token=HF_TOKEN)
+
+def clean_markdown(text):
+    """
+    Forcefully removes Markdown artifacts that the AI might leave behind.
+    Converts **Bold** to <b>Bold</b> and ### Headings to <h3>.
+    """
+    if not text: return ""
+    
+    # 1. Convert Headings (### Title -> <h3>Title</h3>)
+    text = re.sub(r'###\s*(.*?)(?:\n|$)', r'<h3>\1</h3>\n', text)
+    text = re.sub(r'##\s*(.*?)(?:\n|$)', r'<h2>\1</h2>\n', text)
+    
+    # 2. Convert Bold (**Text** -> <b>Text</b>)
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    
+    # 3. Clean up loose asterisks
+    text = text.replace('**', '')
+    
+    return text
 
 def generate_ai_content(prompt):
     print("DEBUG: Requesting text from Llama 3...")
@@ -31,10 +50,11 @@ def generate_ai_content(prompt):
         response = hf_client.chat_completion(
             model="meta-llama/Meta-Llama-3-8B-Instruct", 
             messages=messages,
-            max_tokens=4000, # Increased for longer posts
+            max_tokens=4000,
             temperature=0.7
         )
         content = response.choices[0].message.content.strip()
+        # Basic cleanup
         content = content.replace('"', '').replace("Here is the blog post:", "")
         return content
     except Exception as e:
@@ -63,10 +83,6 @@ def generate_image_pollinations(prompt):
     return None
 
 def upload_media_to_wordpress(image_binary, title):
-    """
-    Uploads binary image data to WordPress Media Library.
-    Returns the Media ID to be used as 'featured_media'.
-    """
     print("DEBUG: Uploading image to WordPress Media Library...")
     media_url = f"{WP_API_BASE}/media"
     headers = {
@@ -131,8 +147,11 @@ def main():
     """
     new_title = generate_ai_content(title_prompt)
     if not new_title: new_title = raw_title
+    
+    # CLEAN TITLE (Just in case)
+    new_title = clean_markdown(new_title)
 
-    # 4. Generate Body (Long Form 350+ words)
+    # 4. Generate Body
     print("Generating Blog Body...")
     
     # Custom CTA HTML
@@ -156,42 +175,48 @@ def main():
     """
 
     body_prompt = f"""
-    Write a detailed, Long-Form blog post (minimum 350 words) about: "{new_title}".
+    Write a detailed, Long-Form blog post (minimum 400 words) about: "{new_title}".
     Context: "{context}"
     
     STRUCTURE:
-    1. **Opening Quote:** Start with a relevant, unique quote in <blockquote> tags.
+    1. **Opening Quote:** Start with a relevant, unique quote wrapped in <blockquote> tags.
     2. **Introduction:** Engaging hook describing the scene.
     3. **Deep Dive:** 2-3 detailed paragraphs analyzing the behavior, environment, or topic seen in the video.
     4. **Did You Know?:** A section with a surprising fact.
     5. **Conclusion:** A thoughtful wrap-up.
     
     RULES:
-    - Write AT LEAST 350 words.
+    - Write AT LEAST 400 words.
     - NEVER mention "HAWI Studios" or cameramen.
-    - Use HTML tags (<h2>, <p>). NO Markdown.
+    - Use HTML tags (<h2>, <p>). 
+    - Do NOT use Markdown (do not use **, do not use ##).
     """
     
-    generated_body = generate_ai_content(body_prompt)
+    raw_body = generate_ai_content(body_prompt)
     
-    if not generated_body:
+    if not raw_body:
         print("Text generation failed.")
         supabase.table("videos").update({"status": "error"}).eq("id", vid_id).execute()
         return
 
-    # 5. Embed Video (Explicitly Centered)
-    video_embed = f'<div style="text-align: center; margin: 30px auto; width: 100%; max-width: 800px;"><iframe width="100%" height="450" src="https://www.youtube.com/embed/{vid_id}" frameborder="0" allowfullscreen style="margin: 0 auto; display: block;"></iframe></div>'
-    final_content = f"{video_embed}\n{generated_body}\n{cta_html}"
+    # CLEAN BODY (Remove stubborn markdown)
+    clean_body = clean_markdown(raw_body)
+
+    # 5. Embed Video (The OEmbed Way)
+    # WordPress automatically turns a plain URL on its own line into a player.
+    # This is safer than iframe tags which get stripped by the API.
+    video_url_block = f"\nhttps://www.youtube.com/watch?v={vid_id}\n"
+    
+    # Combine: Video URL first (so it's at the top), then body, then CTA
+    final_content = f"{video_url_block}\n{clean_body}\n{cta_html}"
 
     # 6. Generate & Upload Image
     print("Generating Image...")
-    # Updated Prompt: Reference Thumbnail Style
     img_prompt = f"YouTube video thumbnail style for {new_title}, high contrast, vivid colors, text-free, 4k, cinematic lighting, engaging composition"
     img_binary = generate_image_pollinations(img_prompt)
     
     featured_media_id = 0
     if img_binary:
-        # UPLOAD TO WP MEDIA LIBRARY (This is the critical fix)
         featured_media_id = upload_media_to_wordpress(img_binary, new_title)
     
     if not featured_media_id:
@@ -203,7 +228,7 @@ def main():
         "title": new_title,
         "content": final_content,
         "status": "publish",
-        "featured_media": featured_media_id  # <--- Sets the Featured Image
+        "featured_media": featured_media_id
     }
     
     try:
