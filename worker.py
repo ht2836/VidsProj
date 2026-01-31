@@ -12,7 +12,7 @@ HF_TOKEN = os.environ["HF_TOKEN"]
 IMGBB_KEY = os.environ["IMGBB_KEY"]
 WP_USER = os.environ["WP_USER"]
 WP_PASS = os.environ["WP_PASS"]
-WP_URL = "https://test.harshtrivedi.in/wp-json/wp/v2/posts" 
+WP_URL = "https://test.harshtrivedi.in/wp-json/wp/v2/posts"
 
 # Initialize Clients
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -21,8 +21,9 @@ hf_client = InferenceClient(token=HF_TOKEN)
 def generate_text_hf(prompt):
     messages = [{"role": "user", "content": prompt}]
     try:
+        # SWITCHED MODEL: Llama-3-8B-Instruct is a valid Chat Model
         response = hf_client.chat_completion(
-            model="mistralai/Mistral-7B-Instruct-v0.3",
+            model="meta-llama/Meta-Llama-3-8B-Instruct", 
             messages=messages,
             max_tokens=1500,
             temperature=0.7
@@ -34,6 +35,7 @@ def generate_text_hf(prompt):
 
 def generate_image_hf(prompt):
     try:
+        # Stability AI is reliable for images
         image = hf_client.text_to_image(
             prompt=prompt,
             model="stabilityai/stable-diffusion-xl-base-1.0"
@@ -63,7 +65,7 @@ def upload_imgbb(image_binary):
 def main():
     print("Connecting to Supabase...")
     
-    # A. Fetch 1 pending video (Select ALL columns to get description)
+    # A. Fetch 1 pending video
     response = supabase.table("videos").select("*").eq("status", "pending").limit(1).execute()
     
     if not response.data:
@@ -73,38 +75,38 @@ def main():
     video = response.data[0]
     vid_id = video['id']
     title = video['title']
-    # Safe fetch for description, defaulting to empty string if None
+    # Safe fetch for description
     description = video.get('description', '') or "No description provided."
     
     print(f"Processing: {title}")
 
-    # B. Get Transcript (WITH FALLBACK LOGIC)
+    # B. Get Transcript (Fixed Import Logic)
     transcript_text = ""
     try:
         print("Attempting to fetch transcript...")
+        # Direct usage of the imported class
         transcript_list = YouTubeTranscriptApi.get_transcript(vid_id)
         transcript_text = " ".join([t['text'] for t in transcript_list])
         print("Transcript fetched successfully!")
     except Exception as e:
-        print(f"Transcript unavailable ({e}). Using Description instead.")
-        transcript_text = f"This video does not have a transcript. Description: {description}"
+        print(f"Transcript unavailable: {e}. Using Description instead.")
+        transcript_text = f"This video is visual. Description: {description}"
 
     # C. Generate Blog Content
-    print("Generating Blog via Hugging Face...")
+    print("Generating Blog via Hugging Face (Llama 3)...")
     blog_prompt = f"""
     You are an expert blogger. Write a detailed, engaging, SEO-friendly blog post about this video.
     
     Video Title: {title}
     Context Information: {transcript_text[:4000]}
     
-    IMPORTANT: Return the response in HTML format (use <h2>, <p> tags). Do not use Markdown (no ** or ##).
+    IMPORTANT: Return the response in HTML format (use <h2>, <p> tags). Do not use Markdown.
     """
     
     blog_content = generate_text_hf(blog_prompt)
     
     if not blog_content:
         print("Failed to generate text. Marking as error.")
-        # If AI completely fails, we mark as error so we don't loop forever
         supabase.table("videos").update({"status": "error"}).eq("id", vid_id).execute()
         return
 
@@ -116,7 +118,7 @@ def main():
     
     if not img_url:
         print("Warning: Image upload failed. Publishing without featured image.")
-        img_url = "" # Continue anyway
+        img_url = "" 
 
     # E. Publish to WordPress
     print("Publishing to WordPress...")
