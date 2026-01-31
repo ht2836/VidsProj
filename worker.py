@@ -1,11 +1,10 @@
 import os
 import requests
-import json
 import re
 from supabase import create_client, Client
 from youtube_transcript_api import YouTubeTranscriptApi
 from huggingface_hub import InferenceClient
-import io
+import random
 import time
 
 # 1. SETUP & CONFIG
@@ -21,105 +20,44 @@ WP_URL = "https://test.harshtrivedi.in/wp-json/wp/v2/posts"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 hf_client = InferenceClient(token=HF_TOKEN)
 
-def strip_hashtags(text):
-    """Removes hashtags from titles to clean them up."""
-    return re.sub(r'#\w+', '', text).strip()
-
-def smart_parse_json(text):
+def generate_ai_content(prompt):
     """
-    Attempts to find and parse a JSON object even if the AI adds extra text.
+    Generic function to get clean text from Llama 3.
     """
-    try:
-        # 1. Try direct parse
-        return json.loads(text)
-    except:
-        pass
-
-    try:
-        # 2. Regex search for the first { ... } block
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-    except:
-        pass
-    
-    return None
-
-def generate_blog_content(title, context):
-    prompt = f"""
-    You are an expert SEO blog writer.
-    
-    TASK:
-    Write a blog post for the video titled: "{title}"
-    Context: "{context[:3000]}"
-    
-    OUTPUT REQUIREMENTS:
-    1. "seo_title": Write a catchy, professional title (NO hashtags).
-    2. "html_body": Write the article body in HTML format.
-       - Use <h2> for section headers.
-       - Use <p> for paragraphs.
-       - Do NOT include the title in the html_body (it goes in the title field).
-       - Do NOT include <html> or <body> tags.
-    
-    CRITICAL: Output ONLY valid JSON. No conversational text.
-    
-    Example format:
-    {{
-      "seo_title": "The Amazing World of Elephants",
-      "html_body": "<p>Elephants are majestic creatures...</p><h2>Habitat</h2><p>They live in...</p>"
-    }}
-    """
-    
     messages = [{"role": "user", "content": prompt}]
-    
     try:
         response = hf_client.chat_completion(
             model="meta-llama/Meta-Llama-3-8B-Instruct", 
             messages=messages,
-            max_tokens=2500,
-            temperature=0.6 # Lower temp for more stability
+            max_tokens=2000,
+            temperature=0.7
         )
-        raw_content = response.choices[0].message.content
-        
-        # Smart Parse
-        data = smart_parse_json(raw_content)
-        
-        if data:
-            return data
-        else:
-            # FALLBACK: If JSON completely fails, treat raw text as body
-            print("JSON parsing failed completely. Using raw text fallback.")
-            clean_body = raw_content.replace('```json', '').replace('```', '').strip()
-            return {
-                "seo_title": title, # Use cleaned original title
-                "html_body": f"<p>{clean_body}</p>"
-            }
-
+        return response.choices[0].message.content.strip().replace('"', '')
     except Exception as e:
-        print(f"AI Text Gen Error: {e}")
+        print(f"AI Error: {e}")
         return None
 
-def generate_image_hf_with_retry(prompt):
-    # List of reliable FREE models to try
-    models = [
-        "CompVis/stable-diffusion-v1-4",
-        "runwayml/stable-diffusion-v1-5",
-        "stabilityai/stable-diffusion-2-1"
-    ]
-    
-    for model in models:
-        try:
-            print(f"Trying image model: {model}...")
-            image = hf_client.text_to_image(prompt=prompt, model=model)
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='JPEG')
-            return img_byte_arr.getvalue()
-        except Exception as e:
-            print(f"Model {model} failed: {e}")
-            time.sleep(2) # Wait a bit before retry
-            
-    print("All image models failed.")
-    return None
+def generate_image_pollinations(prompt):
+    """
+    Uses Pollinations.ai (Completely Free, No API Key).
+    This bypasses Hugging Face's 402/404 errors.
+    """
+    try:
+        # Encode prompt for URL
+        encoded_prompt = requests.utils.quote(prompt)
+        # Random seed to ensure uniqueness
+        seed = random.randint(1, 10000)
+        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=576&seed={seed}&nologo=true"
+        
+        response = requests.get(image_url)
+        if response.status_code == 200:
+            return response.content
+        else:
+            print(f"Pollinations Error: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"Image Gen Error: {e}")
+        return None
 
 def upload_imgbb(image_binary):
     if not image_binary: return None
@@ -133,21 +71,10 @@ def upload_imgbb(image_binary):
         pass
     return None
 
-def insert_video_embed(html_body, video_id):
-    """
-    Inserts video. Tries after first paragraph, falls back to top.
-    """
-    embed_code = f'\n<div class="video-container" style="text-align:center; margin: 20px 0;"><iframe width="100%" height="400" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allowfullscreen></iframe></div>\n'
-    
-    # Try to inject after the first closing </p> tag
-    if "</p>" in html_body:
-        return html_body.replace("</p>", f"</p>{embed_code}", 1)
-    
-    # Fallback: Prepend to the top
-    return embed_code + html_body
-
 def main():
     print("Connecting to Supabase...")
+    
+    # Fetch 1 pending video
     response = supabase.table("videos").select("*").eq("status", "pending").limit(1).execute()
     
     if not response.data:
@@ -156,64 +83,85 @@ def main():
 
     video = response.data[0]
     vid_id = video['id']
-    # Clean the title immediately
     raw_title = video['title']
-    clean_title = strip_hashtags(raw_title)
     description = video.get('description', '') or ""
     
-    print(f"Processing: {clean_title}")
+    print(f"Processing: {raw_title}")
 
-    # --- 1. TRANSCRIPT ---
+    # --- 1. TRANSCRIPT (Safe Fetch) ---
     transcript_text = ""
     try:
-        print("Fetching transcript...")
         transcript_list = YouTubeTranscriptApi.get_transcript(vid_id)
         transcript_text = " ".join([t['text'] for t in transcript_list])
         print("Transcript found.")
-    except Exception as e:
+    except Exception:
         print("Transcript unavailable. Using Description.")
         transcript_text = f"Visual video. Description: {description}"
 
-    # --- 2. BLOG TEXT ---
-    print("Generating Blog...")
-    blog_data = generate_blog_content(clean_title, transcript_text)
+    context = transcript_text[:4000]
+
+    # --- 2. GENERATE TITLE (Separate Call = No Leaks) ---
+    print("Generating Title...")
+    title_prompt = f"""
+    Write a single, catchy, SEO-friendly blog post title for a video about: "{raw_title}".
+    Context: "{context[:500]}"
+    Rules:
+    - Do NOT use hashtags.
+    - Do NOT use quotes.
+    - Output ONLY the title text.
+    """
+    new_title = generate_ai_content(title_prompt)
+    if not new_title: new_title = raw_title # Fallback
+
+    # --- 3. GENERATE BODY (Separate Call = No Leaks) ---
+    print("Generating Blog Body...")
+    body_prompt = f"""
+    Write an engaging blog post about: "{new_title}".
+    Context: "{context}"
     
-    if not blog_data:
-        print("Failed to generate text. Marking error.")
+    Rules:
+    - Format using HTML tags: <h2> for headings, <p> for paragraphs.
+    - Do NOT use Markdown (no ** or ##).
+    - Do NOT include the title in the body.
+    - Write at least 300 words.
+    """
+    html_body = generate_ai_content(body_prompt)
+    
+    if not html_body:
+        print("Text generation failed. Skipping.")
         supabase.table("videos").update({"status": "error"}).eq("id", vid_id).execute()
         return
 
-    final_title = strip_hashtags(blog_data.get("seo_title", clean_title))
-    html_body = blog_data.get("html_body", "<p>Content generation error.</p>")
+    # --- 4. EMBED VIDEO (The WordPress Way) ---
+    # WordPress automatically converts plain URLs on a new line into players
+    video_url = f"https://www.youtube.com/watch?v={vid_id}"
+    final_content = f"{video_url}\n\n{html_body}"
 
-    # --- 3. EMBED VIDEO ---
-    print("Embedding Video...")
-    final_html = insert_video_embed(html_body, vid_id)
-
-    # --- 4. IMAGE ---
-    print("Generating Image...")
-    img_url = ""
-    img_prompt = f"nature documentary photo, {final_title}, award winning photography, 4k"
-    img_binary = generate_image_hf_with_retry(img_prompt)
+    # --- 5. GENERATE IMAGE (Pollinations) ---
+    print("Generating Image (Pollinations)...")
+    img_prompt = f"cinematic shot, {new_title}, wildlife photography, hyperrealistic, 4k"
+    img_binary = generate_image_pollinations(img_prompt)
     
+    img_url = ""
     if img_binary:
         img_url = upload_imgbb(img_binary)
         if not img_url: print("ImgBB Upload Failed.")
     else:
-        print("Image generation skipped after retries.")
+        print("Image generation failed.")
 
-    # --- 5. PUBLISH ---
-    print(f"Publishing: {final_title}")
+    # --- 6. PUBLISH ---
+    print(f"Publishing: {new_title}")
     wp_data = {
-        "title": final_title,
-        "content": final_html,
+        "title": new_title,
+        "content": final_content,
         "status": "publish",
         "fifu_image_url": img_url, 
-        "fifu_image_alt": final_title
+        "fifu_image_alt": new_title
     }
     
     try:
         wp_res = requests.post(WP_URL, json=wp_data, auth=(WP_USER, WP_PASS))
+        
         if wp_res.status_code == 201:
             supabase.table("videos").update({"status": "published"}).eq("id", vid_id).execute()
             print("SUCCESS: Published!")
