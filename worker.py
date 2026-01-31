@@ -6,6 +6,7 @@ from supabase import create_client, Client
 from youtube_transcript_api import YouTubeTranscriptApi
 from huggingface_hub import InferenceClient
 import io
+import time
 
 # 1. SETUP & CONFIG
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -20,47 +21,52 @@ WP_URL = "https://test.harshtrivedi.in/wp-json/wp/v2/posts"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 hf_client = InferenceClient(token=HF_TOKEN)
 
-def clean_json_response(response_text):
-    """
-    Cleans AI output to ensure valid JSON.
-    """
-    cleaned = re.sub(r'```json\s*', '', response_text, flags=re.IGNORECASE)
-    cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.IGNORECASE)
-    return cleaned.strip()
+def strip_hashtags(text):
+    """Removes hashtags from titles to clean them up."""
+    return re.sub(r'#\w+', '', text).strip()
 
-def insert_video_embed(html_body, video_id):
+def smart_parse_json(text):
     """
-    Inserts a YouTube iframe after the first paragraph (<p>...</p>).
+    Attempts to find and parse a JSON object even if the AI adds extra text.
     """
-    embed_code = f'\n<p><iframe width="560" height="315" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></p>\n'
+    try:
+        # 1. Try direct parse
+        return json.loads(text)
+    except:
+        pass
+
+    try:
+        # 2. Regex search for the first { ... } block
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except:
+        pass
     
-    # Find the end of the first paragraph
-    match = re.search(r'</p>', html_body, flags=re.IGNORECASE)
-    if match:
-        # Insert after the first </p>
-        return html_body[:match.end()] + embed_code + html_body[match.end():]
-    else:
-        # If no paragraph found, prepend to top
-        return embed_code + html_body
+    return None
 
 def generate_blog_content(title, context):
     prompt = f"""
-    You are an expert SEO blog writer. Transform this YouTube video into a blog post.
+    You are an expert SEO blog writer.
     
-    VIDEO INFO:
-    Original Title: {title}
-    Context: {context[:4000]}
+    TASK:
+    Write a blog post for the video titled: "{title}"
+    Context: "{context[:3000]}"
     
-    INSTRUCTIONS:
-    1. Create a NEW, catchy, SEO-friendly title (do not use the original one). No hashtags.
-    2. Write an engaging blog post body using HTML tags (<h2>, <h3>, <p>, <ul>, <li>).
-    3. The body must NOT contain the title (H1), as that is handled separately.
+    OUTPUT REQUIREMENTS:
+    1. "seo_title": Write a catchy, professional title (NO hashtags).
+    2. "html_body": Write the article body in HTML format.
+       - Use <h2> for section headers.
+       - Use <p> for paragraphs.
+       - Do NOT include the title in the html_body (it goes in the title field).
+       - Do NOT include <html> or <body> tags.
     
-    OUTPUT FORMAT:
-    Return strictly a JSON object with two keys:
+    CRITICAL: Output ONLY valid JSON. No conversational text.
+    
+    Example format:
     {{
-        "seo_title": "Your new catchy title here",
-        "html_body": "Your html content here..."
+      "seo_title": "The Amazing World of Elephants",
+      "html_body": "<p>Elephants are majestic creatures...</p><h2>Habitat</h2><p>They live in...</p>"
     }}
     """
     
@@ -70,39 +76,50 @@ def generate_blog_content(title, context):
         response = hf_client.chat_completion(
             model="meta-llama/Meta-Llama-3-8B-Instruct", 
             messages=messages,
-            max_tokens=2000,
-            temperature=0.7
+            max_tokens=2500,
+            temperature=0.6 # Lower temp for more stability
         )
-        content = response.choices[0].message.content
+        raw_content = response.choices[0].message.content
         
-        try:
-            clean_content = clean_json_response(content)
-            data = json.loads(clean_content)
+        # Smart Parse
+        data = smart_parse_json(raw_content)
+        
+        if data:
             return data
-        except json.JSONDecodeError:
-            print("JSON Parse Error. Fallback to raw text.")
+        else:
+            # FALLBACK: If JSON completely fails, treat raw text as body
+            print("JSON parsing failed completely. Using raw text fallback.")
+            clean_body = raw_content.replace('```json', '').replace('```', '').strip()
             return {
-                "seo_title": f"Review: {title}",
-                "html_body": f"<p>{content}</p>"
+                "seo_title": title, # Use cleaned original title
+                "html_body": f"<p>{clean_body}</p>"
             }
-            
+
     except Exception as e:
         print(f"AI Text Gen Error: {e}")
         return None
 
-def generate_image_hf(prompt):
-    try:
-        # SWITCHED: CompVis/stable-diffusion-v1-4 is the most reliable free model
-        image = hf_client.text_to_image(
-            prompt=prompt,
-            model="CompVis/stable-diffusion-v1-4" 
-        )
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='JPEG')
-        return img_byte_arr.getvalue()
-    except Exception as e:
-        print(f"AI Image Gen Error: {e}")
-        return None
+def generate_image_hf_with_retry(prompt):
+    # List of reliable FREE models to try
+    models = [
+        "CompVis/stable-diffusion-v1-4",
+        "runwayml/stable-diffusion-v1-5",
+        "stabilityai/stable-diffusion-2-1"
+    ]
+    
+    for model in models:
+        try:
+            print(f"Trying image model: {model}...")
+            image = hf_client.text_to_image(prompt=prompt, model=model)
+            img_byte_arr = io.BytesIO()
+            image.save(img_byte_arr, format='JPEG')
+            return img_byte_arr.getvalue()
+        except Exception as e:
+            print(f"Model {model} failed: {e}")
+            time.sleep(2) # Wait a bit before retry
+            
+    print("All image models failed.")
+    return None
 
 def upload_imgbb(image_binary):
     if not image_binary: return None
@@ -112,16 +129,25 @@ def upload_imgbb(image_binary):
         res = requests.post("https://api.imgbb.com/1/upload", data=payload, files=files)
         if res.status_code == 200:
             return res.json()['data']['url']
-        else:
-            print(f"ImgBB Upload Failed: {res.text}")
-            return None
-    except Exception as e:
-        print(f"ImgBB Error: {e}")
-        return None
+    except:
+        pass
+    return None
+
+def insert_video_embed(html_body, video_id):
+    """
+    Inserts video. Tries after first paragraph, falls back to top.
+    """
+    embed_code = f'\n<div class="video-container" style="text-align:center; margin: 20px 0;"><iframe width="100%" height="400" src="https://www.youtube.com/embed/{video_id}" frameborder="0" allowfullscreen></iframe></div>\n'
+    
+    # Try to inject after the first closing </p> tag
+    if "</p>" in html_body:
+        return html_body.replace("</p>", f"</p>{embed_code}", 1)
+    
+    # Fallback: Prepend to the top
+    return embed_code + html_body
 
 def main():
     print("Connecting to Supabase...")
-    
     response = supabase.table("videos").select("*").eq("status", "pending").limit(1).execute()
     
     if not response.data:
@@ -130,68 +156,69 @@ def main():
 
     video = response.data[0]
     vid_id = video['id']
-    original_title = video['title']
+    # Clean the title immediately
+    raw_title = video['title']
+    clean_title = strip_hashtags(raw_title)
     description = video.get('description', '') or ""
     
-    print(f"Processing: {original_title}")
+    print(f"Processing: {clean_title}")
 
-    # B. Get Transcript (Safe Mode)
+    # --- 1. TRANSCRIPT ---
     transcript_text = ""
     try:
-        print("Attempting to fetch transcript...")
+        print("Fetching transcript...")
         transcript_list = YouTubeTranscriptApi.get_transcript(vid_id)
         transcript_text = " ".join([t['text'] for t in transcript_list])
-        print("Transcript fetched!")
+        print("Transcript found.")
     except Exception as e:
-        print(f"Transcript unavailable. Using Description.")
-        transcript_text = f"Visual video description: {description}"
+        print("Transcript unavailable. Using Description.")
+        transcript_text = f"Visual video. Description: {description}"
 
-    # C. Generate Blog
-    print("Generating Blog content...")
-    blog_data = generate_blog_content(original_title, transcript_text)
+    # --- 2. BLOG TEXT ---
+    print("Generating Blog...")
+    blog_data = generate_blog_content(clean_title, transcript_text)
     
     if not blog_data:
         print("Failed to generate text. Marking error.")
         supabase.table("videos").update({"status": "error"}).eq("id", vid_id).execute()
         return
 
-    new_title = blog_data.get("seo_title", original_title)
-    html_body = blog_data.get("html_body", "<p>Content generation failed.</p>")
+    final_title = strip_hashtags(blog_data.get("seo_title", clean_title))
+    html_body = blog_data.get("html_body", "<p>Content generation error.</p>")
 
-    # --- NEW: Embed Video Logic ---
+    # --- 3. EMBED VIDEO ---
     print("Embedding Video...")
-    html_body = insert_video_embed(html_body, vid_id)
-    # ------------------------------
+    final_html = insert_video_embed(html_body, vid_id)
 
-    # D. Generate Image
+    # --- 4. IMAGE ---
     print("Generating Image...")
-    img_prompt = f"editorial photography, {new_title}, cinematic lighting, 4k, realistic"
-    img_binary = generate_image_hf(img_prompt)
-    img_url = upload_imgbb(img_binary)
+    img_url = ""
+    img_prompt = f"nature documentary photo, {final_title}, award winning photography, 4k"
+    img_binary = generate_image_hf_with_retry(img_prompt)
     
-    if not img_url:
-        print("Warning: Image failed. Publishing text only.")
-        img_url = "" 
+    if img_binary:
+        img_url = upload_imgbb(img_binary)
+        if not img_url: print("ImgBB Upload Failed.")
+    else:
+        print("Image generation skipped after retries.")
 
-    # E. Publish to WordPress
-    print(f"Publishing: {new_title}")
+    # --- 5. PUBLISH ---
+    print(f"Publishing: {final_title}")
     wp_data = {
-        "title": new_title,
-        "content": html_body,
+        "title": final_title,
+        "content": final_html,
         "status": "publish",
         "fifu_image_url": img_url, 
-        "fifu_image_alt": new_title
+        "fifu_image_alt": final_title
     }
     
     try:
         wp_res = requests.post(WP_URL, json=wp_data, auth=(WP_USER, WP_PASS))
-
         if wp_res.status_code == 201:
             supabase.table("videos").update({"status": "published"}).eq("id", vid_id).execute()
             print("SUCCESS: Published!")
         else:
             print(f"WP Error {wp_res.status_code}: {wp_res.text}")
-            
     except Exception as e:
         print(f"WP Connection Error: {e}")
 
