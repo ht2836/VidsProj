@@ -21,7 +21,7 @@ hf_client = InferenceClient(token=HF_TOKEN)
 def generate_text_hf(prompt):
     messages = [{"role": "user", "content": prompt}]
     try:
-        # SWITCHED MODEL: Llama-3-8B-Instruct is a valid Chat Model
+        # Llama 3 is working fine, keeping it.
         response = hf_client.chat_completion(
             model="meta-llama/Meta-Llama-3-8B-Instruct", 
             messages=messages,
@@ -35,10 +35,11 @@ def generate_text_hf(prompt):
 
 def generate_image_hf(prompt):
     try:
-        # Stability AI is reliable for images
+        # CHANGED: Switched to Stable Diffusion 2.1 which is reliably free
+        # SDXL often gets routed to paid tiers now.
         image = hf_client.text_to_image(
             prompt=prompt,
-            model="stabilityai/stable-diffusion-xl-base-1.0"
+            model="stabilityai/stable-diffusion-2-1" 
         )
         img_byte_arr = io.BytesIO()
         image.save(img_byte_arr, format='JPEG')
@@ -75,7 +76,6 @@ def main():
     video = response.data[0]
     vid_id = video['id']
     title = video['title']
-    # Safe fetch for description
     description = video.get('description', '') or "No description provided."
     
     print(f"Processing: {title}")
@@ -84,12 +84,13 @@ def main():
     transcript_text = ""
     try:
         print("Attempting to fetch transcript...")
-        # Direct usage of the imported class
+        # Clean call using the direct import
         transcript_list = YouTubeTranscriptApi.get_transcript(vid_id)
         transcript_text = " ".join([t['text'] for t in transcript_list])
         print("Transcript fetched successfully!")
     except Exception as e:
-        print(f"Transcript unavailable: {e}. Using Description instead.")
+        # This is normal for videos without speech (music/nature)
+        print(f"Transcript unavailable ({e}). Using Description instead.")
         transcript_text = f"This video is visual. Description: {description}"
 
     # C. Generate Blog Content
@@ -111,14 +112,16 @@ def main():
         return
 
     # D. Generate Image
-    print("Generating Image via Hugging Face...")
-    img_prompt = f"high quality editorial thumbnail, {title}, 4k, realistic, vivid colors"
+    print("Generating Image via Hugging Face (SD 2.1)...")
+    # Simplified prompt for SD 2.1
+    img_prompt = f"nature photography, {title}, high quality, realistic, 4k"
     img_binary = generate_image_hf(img_prompt)
-    img_url = upload_imgbb(img_binary)
     
-    if not img_url:
-        print("Warning: Image upload failed. Publishing without featured image.")
-        img_url = "" 
+    img_url = ""
+    if img_binary:
+        img_url = upload_imgbb(img_binary)
+    else:
+        print("Warning: Image generation failed (likely busy). Publishing without image.")
 
     # E. Publish to WordPress
     print("Publishing to WordPress...")
