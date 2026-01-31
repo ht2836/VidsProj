@@ -1,0 +1,37 @@
+name: Daily Blog Publisher
+
+on:
+  # 1. Schedule: Runs at 09:00, 13:00, 17:00, and 21:00 UTC every day
+  schedule:
+    - cron: '0 9,13,17,21 * * *'
+  
+  # 2. Manual Trigger: Allows you to run it immediately from the "Actions" tab for testing
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        # Added 'huggingface_hub' for the AI client and 'Pillow' for image processing
+        run: |
+          pip install requests psycopg2-binary youtube-transcript-api huggingface_hub Pillow
+
+      - name: Run Worker Script
+        env:
+          # These secrets must be set in your Repo Settings -> Secrets and variables -> Actions
+          DB_URI: ${{ secrets.DB_URI }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          IMGBB_KEY: ${{ secrets.IMGBB_KEY }}
+          WP_USER: ${{ secrets.WP_USER }}
+          WP_PASS: ${{ secrets.WP_PASS }}
+        run: python worker.py
