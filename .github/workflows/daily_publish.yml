@@ -2,6 +2,7 @@ name: Daily Blog Publisher
 
 on:
   schedule:
+    # Runs at 09:00, 13:00, 17:00, and 21:00 UTC
     - cron: '0 9,13,17,21 * * *'
   workflow_dispatch:
 
@@ -19,13 +20,11 @@ jobs:
           python-version: '3.9'
 
       - name: Install dependencies
-        # CHANGED: Replaced 'psycopg2-binary' with 'supabase'
         run: |
           pip install requests supabase youtube-transcript-api huggingface_hub Pillow
 
       - name: Run Worker Script
         env:
-          # NEW SECRETS MAPPED HERE
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
