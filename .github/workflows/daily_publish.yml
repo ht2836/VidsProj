@@ -1,11 +1,8 @@
 name: Daily Blog Publisher
 
 on:
-  # 1. Schedule: Runs at 09:00, 13:00, 17:00, and 21:00 UTC every day
   schedule:
     - cron: '0 9,13,17,21 * * *'
-  
-  # 2. Manual Trigger: Allows you to run it immediately from the "Actions" tab for testing
   workflow_dispatch:
 
 jobs:
@@ -22,14 +19,15 @@ jobs:
           python-version: '3.9'
 
       - name: Install dependencies
-        # Added 'huggingface_hub' for the AI client and 'Pillow' for image processing
+        # CHANGED: Replaced 'psycopg2-binary' with 'supabase'
         run: |
-          pip install requests psycopg2-binary youtube-transcript-api huggingface_hub Pillow
+          pip install requests supabase youtube-transcript-api huggingface_hub Pillow
 
       - name: Run Worker Script
         env:
-          # These secrets must be set in your Repo Settings -> Secrets and variables -> Actions
-          DB_URI: ${{ secrets.DB_URI }}
+          # NEW SECRETS MAPPED HERE
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           IMGBB_KEY: ${{ secrets.IMGBB_KEY }}
           WP_USER: ${{ secrets.WP_USER }}
