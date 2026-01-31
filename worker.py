@@ -8,7 +8,7 @@ import random
 import time
 import base64
 
-print("DEBUG: Running FINAL VERSION (Native Media Upload + Long Form)")
+print("DEBUG: Running FINAL CORRECTED VERSION (Media Upload + Centered Embed)")
 
 # 1. SETUP & CONFIG
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -31,7 +31,7 @@ def generate_ai_content(prompt):
         response = hf_client.chat_completion(
             model="meta-llama/Meta-Llama-3-8B-Instruct", 
             messages=messages,
-            max_tokens=3000, # Increased for longer posts
+            max_tokens=4000, # Increased for longer posts
             temperature=0.7
         )
         content = response.choices[0].message.content.strip()
@@ -132,7 +132,7 @@ def main():
     new_title = generate_ai_content(title_prompt)
     if not new_title: new_title = raw_title
 
-    # 4. Generate Body (Long Form)
+    # 4. Generate Body (Long Form 350+ words)
     print("Generating Blog Body...")
     
     # Custom CTA HTML
@@ -156,7 +156,7 @@ def main():
     """
 
     body_prompt = f"""
-    Write a detailed, Long-Form blog post (minimum 400 words) about: "{new_title}".
+    Write a detailed, Long-Form blog post (minimum 350 words) about: "{new_title}".
     Context: "{context}"
     
     STRUCTURE:
@@ -167,7 +167,7 @@ def main():
     5. **Conclusion:** A thoughtful wrap-up.
     
     RULES:
-    - Write AT LEAST 400 words.
+    - Write AT LEAST 350 words.
     - NEVER mention "HAWI Studios" or cameramen.
     - Use HTML tags (<h2>, <p>). NO Markdown.
     """
@@ -179,19 +179,19 @@ def main():
         supabase.table("videos").update({"status": "error"}).eq("id", vid_id).execute()
         return
 
-    # 5. Embed Video (Centered)
-    video_embed = f'<div style="text-align: center; margin: 30px 0;"><iframe width="100%" height="450" src="https://www.youtube.com/embed/{vid_id}" frameborder="0" allowfullscreen></iframe></div>'
+    # 5. Embed Video (Explicitly Centered)
+    video_embed = f'<div style="text-align: center; margin: 30px auto; width: 100%; max-width: 800px;"><iframe width="100%" height="450" src="https://www.youtube.com/embed/{vid_id}" frameborder="0" allowfullscreen style="margin: 0 auto; display: block;"></iframe></div>'
     final_content = f"{video_embed}\n{generated_body}\n{cta_html}"
 
     # 6. Generate & Upload Image
     print("Generating Image...")
-    # Prompt references "YouTube Thumbnail" style
-    img_prompt = f"YouTube video thumbnail for {new_title}, vivid colors, 4k, high contrast, highly detailed, text-free, cinematic lighting"
+    # Updated Prompt: Reference Thumbnail Style
+    img_prompt = f"YouTube video thumbnail style for {new_title}, high contrast, vivid colors, text-free, 4k, cinematic lighting, engaging composition"
     img_binary = generate_image_pollinations(img_prompt)
     
     featured_media_id = 0
     if img_binary:
-        # UPLOAD TO WP MEDIA LIBRARY
+        # UPLOAD TO WP MEDIA LIBRARY (This is the critical fix)
         featured_media_id = upload_media_to_wordpress(img_binary, new_title)
     
     if not featured_media_id:
@@ -203,7 +203,7 @@ def main():
         "title": new_title,
         "content": final_content,
         "status": "publish",
-        "featured_media": featured_media_id  # <--- THIS SETS THE THUMBNAIL
+        "featured_media": featured_media_id  # <--- Sets the Featured Image
     }
     
     try:
