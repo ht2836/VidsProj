@@ -7,6 +7,8 @@ from huggingface_hub import InferenceClient
 import random
 import time
 
+print("DEBUG: Running FINAL POLLINATIONS VERSION")
+
 # 1. SETUP & CONFIG
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
@@ -32,8 +34,8 @@ def generate_ai_content(prompt):
             max_tokens=2000,
             temperature=0.7
         )
-        # Clean up common artifacts
         content = response.choices[0].message.content.strip()
+        # Clean up common AI artifacts
         content = content.replace('"', '').replace("Here is the blog post:", "")
         return content
     except Exception as e:
@@ -52,6 +54,7 @@ def generate_image_pollinations(prompt):
         seed = random.randint(1, 10000)
         image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=576&seed={seed}&nologo=true"
         
+        # Verify it works (Pollinations creates image on the fly)
         response = requests.get(image_url)
         if response.status_code == 200:
             return response.content
@@ -103,7 +106,7 @@ def main():
 
     context = transcript_text[:4000]
 
-    # --- 2. GENERATE TITLE (Separate Call = No Leaks) ---
+    # --- 2. GENERATE TITLE (Separate Call) ---
     print("Generating Title...")
     title_prompt = f"""
     Write a single, catchy, SEO-friendly blog post title for a video about: "{raw_title}".
@@ -116,22 +119,25 @@ def main():
     new_title = generate_ai_content(title_prompt)
     if not new_title: new_title = raw_title
 
-    # --- 3. GENERATE BODY (Strict Format) ---
+    # --- 3. GENERATE BODY (Strict Structure) ---
     print("Generating Blog Body...")
     body_prompt = f"""
     Write a blog post about: "{new_title}".
     Context: "{context}"
     
-    STRICT CONTENT RULES:
-    1. NEVER mention "HAWI Studios" or any specific cameraman/studio names.
-    2. Start with a relevant, non-repeatable QUOTE about the topic (in italics).
-    3. Follow with an engaging paragraph about the subject.
-    4. Then, include a "Did You Know?" section with a random fact about the topic.
-    5. End with a concluding paragraph and this exact Call to Action: 
-       "If you enjoyed this, please support us by subscribing to our YouTube channel and following us on Facebook, Instagram, X, and Bluesky!"
+    STRICT STRUCTURE INSTRUCTIONS:
+    1. Start with a relevant, non-repeatable QUOTE about the topic (in italics <blockquote>).
+    2. Then write an engaging paragraph describing the video content.
+    3. Then include a "Did You Know?" section with a random fact about the topic.
+    4. Conclude with a final paragraph.
+    5. END EXACTLY WITH THIS CALL TO ACTION: "If you want to support us, show the support by subscribing to our channel on YouTube, and follow us on FB, Insta, X, and Bluesky."
+    
+    RESTRICTIONS:
+    - NEVER mention "HAWI Studios".
+    - NEVER mention the cameraman's name.
     
     FORMATTING:
-    - Use HTML tags: <blockquote> for the quote, <p> for paragraphs, <h3> for headers.
+    - Use HTML tags: <blockquote>, <p>, <h3>.
     - Do NOT use Markdown.
     - Do NOT include the title in the body.
     """
@@ -142,16 +148,14 @@ def main():
         supabase.table("videos").update({"status": "error"}).eq("id", vid_id).execute()
         return
 
-    # --- 4. EMBED VIDEO (The WordPress Way) ---
-    # WordPress automatically converts plain URLs on a new line into players
+    # --- 4. EMBED VIDEO (The WordPress "Magic" Way) ---
+    # Placing the URL on the very first line forces WordPress to use oEmbed
     video_url = f"https://www.youtube.com/watch?v={vid_id}"
-    
-    # Structure: Video URL (top) + Body
     final_content = f"{video_url}\n\n{html_body}"
 
     # --- 5. GENERATE IMAGE (Pollinations) ---
     print("Generating Image (Pollinations)...")
-    img_prompt = f"cinematic shot, {new_title}, wildlife photography, hyperrealistic, 4k"
+    img_prompt = f"cinematic shot, {new_title}, wildlife photography, hyperrealistic, 4k, award winning"
     img_binary = generate_image_pollinations(img_prompt)
     
     img_url = ""
