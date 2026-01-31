@@ -32,7 +32,10 @@ def generate_ai_content(prompt):
             max_tokens=2000,
             temperature=0.7
         )
-        return response.choices[0].message.content.strip().replace('"', '')
+        # Clean up common artifacts
+        content = response.choices[0].message.content.strip()
+        content = content.replace('"', '').replace("Here is the blog post:", "")
+        return content
     except Exception as e:
         print(f"AI Error: {e}")
         return None
@@ -111,19 +114,26 @@ def main():
     - Output ONLY the title text.
     """
     new_title = generate_ai_content(title_prompt)
-    if not new_title: new_title = raw_title # Fallback
+    if not new_title: new_title = raw_title
 
-    # --- 3. GENERATE BODY (Separate Call = No Leaks) ---
+    # --- 3. GENERATE BODY (Strict Format) ---
     print("Generating Blog Body...")
     body_prompt = f"""
-    Write an engaging blog post about: "{new_title}".
+    Write a blog post about: "{new_title}".
     Context: "{context}"
     
-    Rules:
-    - Format using HTML tags: <h2> for headings, <p> for paragraphs.
-    - Do NOT use Markdown (no ** or ##).
+    STRICT CONTENT RULES:
+    1. NEVER mention "HAWI Studios" or any specific cameraman/studio names.
+    2. Start with a relevant, non-repeatable QUOTE about the topic (in italics).
+    3. Follow with an engaging paragraph about the subject.
+    4. Then, include a "Did You Know?" section with a random fact about the topic.
+    5. End with a concluding paragraph and this exact Call to Action: 
+       "If you enjoyed this, please support us by subscribing to our YouTube channel and following us on Facebook, Instagram, X, and Bluesky!"
+    
+    FORMATTING:
+    - Use HTML tags: <blockquote> for the quote, <p> for paragraphs, <h3> for headers.
+    - Do NOT use Markdown.
     - Do NOT include the title in the body.
-    - Write at least 300 words.
     """
     html_body = generate_ai_content(body_prompt)
     
@@ -135,6 +145,8 @@ def main():
     # --- 4. EMBED VIDEO (The WordPress Way) ---
     # WordPress automatically converts plain URLs on a new line into players
     video_url = f"https://www.youtube.com/watch?v={vid_id}"
+    
+    # Structure: Video URL (top) + Body
     final_content = f"{video_url}\n\n{html_body}"
 
     # --- 5. GENERATE IMAGE (Pollinations) ---
