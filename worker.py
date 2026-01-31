@@ -45,7 +45,7 @@ def generate_ai_content(prompt):
 def generate_image_pollinations(prompt):
     """
     Uses Pollinations.ai (Completely Free, No API Key).
-    This bypasses Hugging Face's 402/404 errors.
+    This bypasses Hugging Face's 402/404 errors completely.
     """
     try:
         # Encode prompt for URL
@@ -126,7 +126,7 @@ def main():
     Context: "{context}"
     
     STRICT STRUCTURE INSTRUCTIONS:
-    1. Start with a relevant, non-repeatable QUOTE about the topic (in italics <blockquote>).
+    1. Start with a relevant, non-repeatable QUOTE about the topic (wrap in <blockquote>).
     2. Then write an engaging paragraph describing the video content.
     3. Then include a "Did You Know?" section with a random fact about the topic.
     4. Conclude with a final paragraph.
@@ -148,10 +148,12 @@ def main():
         supabase.table("videos").update({"status": "error"}).eq("id", vid_id).execute()
         return
 
-    # --- 4. EMBED VIDEO (The WordPress "Magic" Way) ---
-    # Placing the URL on the very first line forces WordPress to use oEmbed
-    video_url = f"https://www.youtube.com/watch?v={vid_id}"
-    final_content = f"{video_url}\n\n{html_body}"
+    # --- 4. EMBED VIDEO (Using Explicit Iframe) ---
+    # We use an explicit iframe to guarantee it shows up
+    video_embed = f'<div class="video-container" style="text-align: center; margin-bottom: 20px;"><iframe width="560" height="315" src="https://www.youtube.com/embed/{vid_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>'
+    
+    # Combine: Video first, then body
+    final_content = f"{video_embed}\n{html_body}"
 
     # --- 5. GENERATE IMAGE (Pollinations) ---
     print("Generating Image (Pollinations)...")
