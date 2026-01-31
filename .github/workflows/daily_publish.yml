@@ -2,7 +2,6 @@ name: Daily Blog Publisher
 
 on:
   schedule:
-    # Runs at 09:00, 13:00, 17:00, and 21:00 UTC
     - cron: '0 9,13,17,21 * * *'
   workflow_dispatch:
 
@@ -31,4 +30,5 @@ jobs:
           IMGBB_KEY: ${{ secrets.IMGBB_KEY }}
           WP_USER: ${{ secrets.WP_USER }}
           WP_PASS: ${{ secrets.WP_PASS }}
-        run: python worker.py
+        # The '-u' flag forces Python to print logs immediately
+        run: python -u worker.py

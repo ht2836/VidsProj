@@ -1,13 +1,14 @@
 import os
 import requests
 import re
-from supabase import create_client, Client
 from youtube_transcript_api import YouTubeTranscriptApi
 from huggingface_hub import InferenceClient
 import random
 import time
+# Import Supabase but don't connect yet
+from supabase import create_client, Client
 
-print("DEBUG: Running FINAL POLLINATIONS VERSION")
+print("DEBUG: Script started. Importing libraries complete.")
 
 # 1. SETUP & CONFIG
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -18,14 +19,11 @@ WP_USER = os.environ["WP_USER"]
 WP_PASS = os.environ["WP_PASS"]
 WP_URL = "https://test.harshtrivedi.in/wp-json/wp/v2/posts"
 
-# Initialize Clients
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Initialize AI Client (Stateless, safe to do here)
 hf_client = InferenceClient(token=HF_TOKEN)
 
 def generate_ai_content(prompt):
-    """
-    Generic function to get clean text from Llama 3.
-    """
+    print("DEBUG: Sending request to Llama 3...")
     messages = [{"role": "user", "content": prompt}]
     try:
         response = hf_client.chat_completion(
@@ -35,7 +33,6 @@ def generate_ai_content(prompt):
             temperature=0.7
         )
         content = response.choices[0].message.content.strip()
-        # Clean up common AI artifacts
         content = content.replace('"', '').replace("Here is the blog post:", "")
         return content
     except Exception as e:
@@ -43,20 +40,15 @@ def generate_ai_content(prompt):
         return None
 
 def generate_image_pollinations(prompt):
-    """
-    Uses Pollinations.ai (Completely Free, No API Key).
-    This bypasses Hugging Face's 402/404 errors completely.
-    """
+    print("DEBUG: Requesting image from Pollinations...")
     try:
-        # Encode prompt for URL
         encoded_prompt = requests.utils.quote(prompt)
-        # Random seed to ensure uniqueness
         seed = random.randint(1, 10000)
         image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=576&seed={seed}&nologo=true"
         
-        # Verify it works (Pollinations creates image on the fly)
-        response = requests.get(image_url)
+        response = requests.get(image_url, timeout=30) # Added timeout
         if response.status_code == 200:
+            print("DEBUG: Image received successfully.")
             return response.content
         else:
             print(f"Pollinations Error: {response.status_code}")
@@ -67,19 +59,27 @@ def generate_image_pollinations(prompt):
 
 def upload_imgbb(image_binary):
     if not image_binary: return None
+    print("DEBUG: Uploading to ImgBB...")
     payload = {"key": IMGBB_KEY}
     files = {"image": image_binary}
     try:
-        res = requests.post("https://api.imgbb.com/1/upload", data=payload, files=files)
+        res = requests.post("https://api.imgbb.com/1/upload", data=payload, files=files, timeout=30)
         if res.status_code == 200:
             return res.json()['data']['url']
-    except:
-        pass
+        print(f"ImgBB Failed: {res.text}")
+    except Exception as e:
+        print(f"ImgBB connection error: {e}")
     return None
 
 def main():
-    print("Connecting to Supabase...")
-    
+    print("DEBUG: Initializing Supabase connection...")
+    try:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"CRITICAL: Could not connect to Supabase. {e}")
+        return
+
+    print("DEBUG: Fetching pending video...")
     # Fetch 1 pending video
     response = supabase.table("videos").select("*").eq("status", "pending").limit(1).execute()
     
@@ -94,7 +94,7 @@ def main():
     
     print(f"Processing: {raw_title}")
 
-    # --- 1. TRANSCRIPT (Safe Fetch) ---
+    # --- 1. TRANSCRIPT ---
     transcript_text = ""
     try:
         transcript_list = YouTubeTranscriptApi.get_transcript(vid_id)
@@ -106,7 +106,7 @@ def main():
 
     context = transcript_text[:4000]
 
-    # --- 2. GENERATE TITLE (Separate Call) ---
+    # --- 2. GENERATE TITLE ---
     print("Generating Title...")
     title_prompt = f"""
     Write a single, catchy, SEO-friendly blog post title for a video about: "{raw_title}".
@@ -119,7 +119,7 @@ def main():
     new_title = generate_ai_content(title_prompt)
     if not new_title: new_title = raw_title
 
-    # --- 3. GENERATE BODY (Strict Structure) ---
+    # --- 3. GENERATE BODY ---
     print("Generating Blog Body...")
     body_prompt = f"""
     Write a blog post about: "{new_title}".
@@ -148,14 +148,11 @@ def main():
         supabase.table("videos").update({"status": "error"}).eq("id", vid_id).execute()
         return
 
-    # --- 4. EMBED VIDEO (Using Explicit Iframe) ---
-    # We use an explicit iframe to guarantee it shows up
-    video_embed = f'<div class="video-container" style="text-align: center; margin-bottom: 20px;"><iframe width="560" height="315" src="https://www.youtube.com/embed/{vid_id}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>'
-    
-    # Combine: Video first, then body
-    final_content = f"{video_embed}\n{html_body}"
+    # --- 4. EMBED VIDEO ---
+    video_url = f"https://www.youtube.com/watch?v={vid_id}"
+    final_content = f"{video_url}\n\n{html_body}"
 
-    # --- 5. GENERATE IMAGE (Pollinations) ---
+    # --- 5. GENERATE IMAGE ---
     print("Generating Image (Pollinations)...")
     img_prompt = f"cinematic shot, {new_title}, wildlife photography, hyperrealistic, 4k, award winning"
     img_binary = generate_image_pollinations(img_prompt)
@@ -178,7 +175,8 @@ def main():
     }
     
     try:
-        wp_res = requests.post(WP_URL, json=wp_data, auth=(WP_USER, WP_PASS))
+        print("DEBUG: Sending to WordPress...")
+        wp_res = requests.post(WP_URL, json=wp_data, auth=(WP_USER, WP_PASS), timeout=30)
         
         if wp_res.status_code == 201:
             supabase.table("videos").update({"status": "published"}).eq("id", vid_id).execute()
