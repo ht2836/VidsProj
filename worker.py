@@ -10,7 +10,7 @@ HF_TOKEN = os.environ["HF_TOKEN"]
 IMGBB_KEY = os.environ["IMGBB_KEY"]
 WP_USER = os.environ["WP_USER"]
 WP_PASS = os.environ["WP_PASS"]
-WP_URL = "https://your-site.com/wp-json/wp/v2/posts"
+WP_URL = "https://test.harshtrivedi.in/wp-json/wp/v2/posts"
 
 # Initialize the Client (Handles all URLs automatically)
 client = InferenceClient(token=HF_TOKEN)
